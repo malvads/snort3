@@ -46,17 +46,21 @@
 #include "protocols/tcp.h"
 #include "protocols/udp.h"
 #include "protocols/vlan.h"
-#ifdef HAVE_RDKAFKA
-#include <librdkafka/rdkafka.h>
-#endif
 using namespace snort;
 using namespace std;
 
 #define LOG_BUFFER (4*K_BYTES)
 
 #ifdef HAVE_RDKAFKA
+#include <librdkafka/rdkafka.h>
 #define EXPORT_TYPE_KAFKA "kafka"
 #endif
+
+#ifdef HAVE_CRP
+#include <cpr/cpr.h>
+#define EXPORT_TYPE_HTTP "http"
+#endif
+
 #define EXPORT_TYPE_STDOUT "stdout"
 
 static THREAD_LOCAL TextLog* json_log;
@@ -67,6 +71,8 @@ static THREAD_LOCAL TextLog* json_log;
 #define D_TOPIC "rb_event"
 #define D_KAFKA_HOST "kafka.service:9092"
 #endif
+
+
 //-------------------------------------------------------------------------
 // field formatting functions
 //-------------------------------------------------------------------------
@@ -709,15 +715,23 @@ static const Parameter s_params[] =
 {
     { "file", Parameter::PT_BOOL, nullptr, "false",
       "output to " F_NAME " instead of stdout" },
+#ifdef HAVE_CPR || HAVE_RDKAFKA
+    { "type", Parameter::PT_STRING, nullptr, EXPORT_TYPE_STDOUT,
+      "Default export type" },
+#endif
+
+#ifdef HAVE_CPR
+    { "http_endpoint", Parameter::PT_STRING, nullptr, nullptr,
+      "HTTP endpoint for send data to the manager" },
+#endif
+
 #ifdef HAVE_RDKAFKA
     {"kafka_topic", Parameter::PT_STRING, nullptr, D_TOPIC,
         "send data to topic " D_TOPIC},
 
-    {"kafka_broker", Parameter::PT_STRING, nullptr, D_KAFKA_HOST,
-        "Kafka broker host"},
-
-    { "type", Parameter::PT_STRING, nullptr, EXPORT_TYPE_STDOUT,
-      "Default export type" },
+    {"kafka_broker", Parameter::PT_STRING, nullptr, D_KAFKA_HOST, 
+    
+    "Kafka broker host"},
 #endif
     { "fields", Parameter::PT_MULTI, json_range, json_deflt,
       "selected fields will be output in given order left to right" },
@@ -750,7 +764,12 @@ public:
 #ifdef HAVE_RDKAFKA
     string kafka_broker;
     string kafka_topic;
+#endif
+#ifdef HAVE_CPR || HAVE_RDKAFKA
     string type;
+#endif
+#ifdef HAVE_CPR
+    string http_endpoint;
 #endif
     size_t limit = 0;
     string sep;
@@ -759,9 +778,17 @@ public:
 
 bool JsonModule::set(const char*, Value& v, SnortConfig*)
 {
-#ifdef HAVE_RDKAFKA
+#ifdef HAVE_CPR || HAVE_RDKAFKA
     if ( v.is("type") )
         type = v.get_string();
+#endif
+
+#ifdef HAVE_CPR
+    if ( v.is("http_endpoint") )
+        http_endpoint = v.get_string();
+#endif
+
+#ifdef HAVE_RDKAFKA
 
     if (v.is("kafka_broker"))
         kafka_broker = v.get_string();
@@ -903,6 +930,49 @@ thread_local rd_kafka_conf_t *KafkaExporterStrategy::conf = nullptr;
 thread_local rd_kafka_topic_t *KafkaExporterStrategy::rkt = nullptr;
 #endif
 
+#ifdef HAVE_CPR
+class HttpExporterStrategy : public  LogExporterBaseStrategy {
+public:
+    HttpExporterStrategy(const string http_endpoint, vector<JsonFunc> fields)
+        : http_endpoint(http_endpoint), fields(fields)
+    {}
+
+    void open() override {
+        json_log = TextLog_Init(F_NAME, LOG_BUFFER, 0);
+    }
+
+    void close() override {
+        if ( json_log )
+            TextLog_Term(json_log);
+    }
+
+    void alert(Packet *p, const char *msg, const Event &event) override {
+        Args a = { p, msg, event, false };
+        TextLog_Putc(json_log, '{');
+
+        for ( JsonFunc f : fields )
+        {
+            f(a);
+            a.comma = true;
+        }
+
+        TextLog_Print(json_log, " }\n");
+        char* json_event = TextLog_GetBuffer(json_log);
+        if(json_event){
+            cpr::Response r = cpr::Post(cpr::Url{http_endpoint},
+                            cpr::VerifySsl{false},
+                            cpr::Body(json_event),
+                            cpr::Header{{"Content-Type", "application/json"}});
+        }
+        TextLog_Flush(json_log);
+    }
+
+private:
+    string http_endpoint;
+    vector<JsonFunc> fields;
+};
+#endif
+
 class StdoutExporterStrategy : public  LogExporterBaseStrategy {
 public:
     StdoutExporterStrategy(const bool filename, unsigned long limit, vector<JsonFunc> fields)
@@ -946,6 +1016,12 @@ public:
 #ifdef HAVE_RDKAFKA
         if(m->type == EXPORT_TYPE_KAFKA) {
             return make_unique<KafkaExporterStrategy>(m->kafka_broker, m->kafka_topic, m->fields);
+        }
+#endif
+
+#ifdef HAVE_CPR
+        if(m->type == EXPORT_TYPE_HTTP) {
+            return make_unique<HttpExporterStrategy>(m->http_endpoint, m->fields);
         }
 #endif
         return make_unique<StdoutExporterStrategy>(m->file, m->limit, m->fields);

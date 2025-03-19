@@ -208,7 +208,7 @@ bool TextLog_Flush(TextLog* const txt)
     return false;
 }
 
-#ifdef HAVE_RDKAFKA
+#ifdef HAVE_CPR || HAVE_RDKAFKA
 /*-------------------------------------------------------------------
  * TextLog_GetBuffer: return txt->buf
  *-------------------------------------------------------------------

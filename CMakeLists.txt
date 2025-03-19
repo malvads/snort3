@@ -220,4 +220,12 @@ else ()
     LIBRDKAFKA:     OFF")
 endif ()
 
+if (HAVE_CPR)
+    message("\
+    CPR:            ON")
+else ()
+    message("\
+    CPR:            OFF")
+endif ()
+
 message("-------------------------------------------------------\n")

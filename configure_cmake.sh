@@ -503,6 +503,12 @@ while [ $# -ne 0 ]; do
         --enable-alert-kafka)
             append_cache_entry ENABLE_ALERT_KAFKA BOOL true
             ;;
+        --with-cpr-includes=*)
+            append_cache_entry CPR_INCLUDE_DIR_HINT PATH $optarg
+            ;;
+        --with-cpr-libraries=*)
+            append_cache_entry CPR_LIBRARIES_DIR_HINT PATH $optarg
+            ;;
         --without-libml)
             append_cache_entry USE_LIBML_MOCK BOOL true
             ;;
