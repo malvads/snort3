@@ -19,6 +19,9 @@
 // alert_json.cc author Russ Combs <rucombs@cisco.com>
 //
 
+// Extended for sending to kafka (librdkafka) and http (libcpr) with extra-fields
+// by Miguel Álvarez <malvarez@redborder.com>
+
 // preliminary version based on hacking up alert_csv.cc.  should probably
 // share a common implementation class.
 
@@ -56,9 +59,17 @@ using namespace std;
 #define EXPORT_TYPE_KAFKA "kafka"
 #endif
 
-#ifdef HAVE_CRP
+#ifdef HAVE_CPR
 #include <cpr/cpr.h>
 #define EXPORT_TYPE_HTTP "http"
+#endif
+
+#ifdef HAVE_GEOIP
+#include "geoip/rbgeoip.h"
+#endif
+
+#ifdef HAVE_ENRICHMENT
+#include "enrichment/sensor_enrichment.h"
 #endif
 
 #define EXPORT_TYPE_STDOUT "stdout"
@@ -71,7 +82,13 @@ static THREAD_LOCAL TextLog* json_log;
 #define D_TOPIC "rb_event"
 #define D_KAFKA_HOST "kafka.service:9092"
 #endif
-
+#ifdef HAVE_MACVENDORDB
+#include "macs/mac_vendors.h"
+MacVendorDatabase MacVendorDB;
+#endif
+#ifndef RB_ENABLE_OVERRIDES
+#define RB_ENABLE_OVERRIDES true
+#endif
 
 //-------------------------------------------------------------------------
 // field formatting functions
@@ -99,18 +116,40 @@ static void print_label(const Args& a, const char* label)
 static bool ff_action(const Args& a)
 {
     print_label(a, "action");
-    TextLog_Quote(json_log, a.pkt->active->get_action_string());
+    if(RB_ENABLE_OVERRIDES){
+        string action = "log";
+        if(a.pkt->active->packet_was_dropped()) action = "drop";
+        if(a.pkt->active->packet_would_be_dropped()) action = "should_drop";
+#ifdef RB_EXTRADATA
+        if(a.pkt->active->packet_cant_be_dropped()) action = "cant_drop";
+        if(a.pkt->active->packet_would_be_allowed()) action = "alert";
+#endif
+        TextLog_Quote(json_log, action.c_str());
+    } else {
+        TextLog_Quote(json_log, a.pkt->active->get_action_string());
+    }
     return true;
 }
 
 static bool ff_class(const Args& a)
 {
-    const char* cls = a.event.get_class_type();
-    if ( !cls ) cls = "none";
+    if(RB_ENABLE_OVERRIDES){
+        const char *cls = "none";
 
-    print_label(a, "class");
-    TextLog_Quote(json_log, cls);
-    return true;
+        if (a.event.get_class_type() && a.event.get_class_type()[0] != '\0')
+            cls = a.event.get_class_type();
+
+        print_label(a, "class");
+        TextLog_Quote(json_log, cls);
+        return true;
+    } else {
+        const char* cls = a.event.get_class_type();
+        if ( !cls ) cls = "none";
+
+        print_label(a, "class");
+        TextLog_Quote(json_log, cls);
+        return true;
+    }
 }
 
 static bool ff_b64_data(const Args& a)
@@ -180,6 +219,217 @@ static bool ff_dir(const Args& a)
     TextLog_Quote(json_log, dir);
     return true;
 }
+
+#ifdef RB_EXTRADATA
+static bool ff_dst(const Args &a)
+{
+    if (a.pkt->has_ip() or a.pkt->is_data())
+    {
+        SfIpString ip_str;
+        print_label(a, "dst");
+        TextLog_Quote(json_log, a.pkt->ptrs.ip_api.get_dst()->ntop(ip_str));
+        return true;
+    }
+    return false;
+}
+
+static bool ff_priority(const Args &a){
+    static const char *priority_name[] = {NULL, "high", "medium", "low", "very low"};
+    const int priority_id = a.event.sig_info->priority;
+    const char *prio_name = NULL;
+    if(priority_id < sizeof(priority_name)/sizeof(priority_name[0]))
+        prio_name = priority_name[priority_id];
+    print_label(a, "priority");
+    TextLog_Print(json_log, "\"%s\"", prio_name);
+    return true;
+}
+
+#endif
+
+#if defined(RB_EXTRADATA) && defined(HAVE_GEOIP)
+static bool ff_src_country_code(const Args &a)
+{
+    if (a.pkt->has_ip() || a.pkt->is_data())
+    {
+        print_label(a, "src_country_code");
+        SfIpString ip_str;
+        a.pkt->ptrs.ip_api.get_src()->ntop(ip_str);
+        string ip_string = ip_str;
+        string country = GeoIpLoader::Manager::getInstance()->getCountryByIP(ip_string);
+        TextLog_Print(json_log, "\"%s\"", country.c_str());
+        return true;
+    }
+    return false;
+}
+#endif
+
+#ifdef RB_EXTRADATA
+static bool ff_dst_country(const Args &a)
+{
+    print_label(a, "dst_country");
+    TextLog_Print(json_log, "\"Unknown\"");
+    return true;
+}
+static bool ff_src_country(const Args &a)
+{
+    print_label(a, "src_country");
+    TextLog_Print(json_log, "\"Unknown\"");
+    return true;
+}
+static bool ff_ethlength_range(const Args &a)
+{
+    if (a.pkt)
+    {
+        int len = 0;
+
+        if (a.pkt->has_ip())
+            len = a.pkt->ptrs.ip_api.dgram_len();
+        else
+            len = a.pkt->dsize;
+
+        print_label(a, "ethlength_range");
+
+        if (len == 0)
+        {
+            TextLog_Print(json_log, "\"0\"");
+        }
+        else if (len <= 64)
+        {
+            TextLog_Print(json_log, "\"(0-64]\"");
+        }
+        else if (len <= 128)
+        {
+            TextLog_Print(json_log, "\"(64-128]\"");
+        }
+        else if (len <= 256)
+        {
+            TextLog_Print(json_log, "\"(128-256]\"");
+        }
+        else if (len <= 512)
+        {
+            TextLog_Print(json_log, "\"(256-512]\"");
+        }
+        else if (len <= 768)
+        {
+            TextLog_Print(json_log, "\"(512-768]\"");
+        }
+        else if (len <= 1024)
+        {
+            TextLog_Print(json_log, "\"(768-1024]\"");
+        }
+        else if (len <= 1280)
+        {
+            TextLog_Print(json_log, "\"(1024-1280]\"");
+        }
+        else if (len <= 1514)
+        {
+            TextLog_Print(json_log, "\"(1280-1514]\"");
+        }
+        else if (len <= 2048)
+        {
+            TextLog_Print(json_log, "\"(1514-2048]\"");
+        }
+        else if (len <= 4096)
+        {
+            TextLog_Print(json_log, "\"(2048-4096]\"");
+        }
+        else if (len <= 8192)
+        {
+            TextLog_Print(json_log, "\"(4096-8192]\"");
+        }
+        else if (len <= 16384)
+        {
+            TextLog_Print(json_log, "\"(8192-16384]\"");
+        }
+        else if (len <= 32768)
+        {
+            TextLog_Print(json_log, "\"(16384-32768]\"");
+        }
+        else
+        {
+            TextLog_Print(json_log, "\">32768\"");
+        }
+
+        return true;
+    }
+    return false;
+}
+static bool ff_sig_generator(const Args &a)
+{
+    print_label(a, "sig_generator");
+    TextLog_Print(json_log, "\"%u\"", a.event.sig_info->rev);
+
+    return true;
+}
+static bool ff_sig_id(const Args &a)
+{
+    print_label(a, "sig_id");
+    TextLog_Print(json_log, "\"%u\"", a.event.sig_info->sid);
+    return true;
+}
+
+#ifdef HAVE_MACVENDORDB
+static bool ff_eth_src_mac(const Args &a)
+{
+    if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
+        return false;
+
+    print_label(a, "ethsrcmac");
+
+    const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
+
+    uint64_t mac_prefix = 0;
+    for (int i = 0; i < 6; ++i)
+    {
+        mac_prefix <<= 8;
+        mac_prefix |= static_cast<uint64_t>(eh->ether_src[i]);
+    }
+
+    const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
+
+    if (vendor)
+    {
+        TextLog_Print(json_log, "\"%s\"", vendor);
+    }
+    else
+    {
+        TextLog_Print(json_log, "\"%s\"", "Unknown");
+    }
+
+    return true;
+}
+
+static bool ff_eth_dst_mac(const Args &a)
+{
+    if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
+        return false;
+
+    print_label(a, "ethdstmac");
+
+    const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
+
+    uint64_t mac_prefix = 0;
+    for (int i = 0; i < 6; ++i)
+    {
+        mac_prefix <<= 8;
+        mac_prefix |= static_cast<uint64_t>(eh->ether_dst[i]);
+    }
+
+    const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
+
+    if (vendor)
+    {
+        TextLog_Print(json_log, "\"%s\"", vendor);
+    }
+    else
+    {
+        TextLog_Print(json_log, "\"%s\"", "Unknown");
+    }
+
+    return true;
+}
+#endif
+#endif
 
 static bool ff_dst_addr(const Args& a)
 {
@@ -633,11 +883,22 @@ static bool ff_tcp_win(const Args& a)
 
 static bool ff_timestamp(const Args& a)
 {
-    print_label(a, "timestamp");
-    TextLog_Putc(json_log, '"');
-    LogTimeStamp(json_log, a.pkt);
-    TextLog_Putc(json_log, '"');
-    return true;
+    if(RB_ENABLE_OVERRIDES){
+        time_t current_time = time(nullptr);
+        if (a.comma)
+        {
+            TextLog_Putc(json_log, ',');
+        }
+        TextLog_Print(json_log, "\"timestamp\": ");
+        TextLog_Print(json_log, to_string(current_time).c_str());
+        return true;
+    } else {
+        print_label(a, "timestamp");
+        TextLog_Putc(json_log, '"');
+        LogTimeStamp(json_log, a.pkt);
+        TextLog_Putc(json_log, '"');
+        return true;
+    }
 }
 
 static bool ff_tos(const Args& a)
@@ -706,7 +967,7 @@ static const JsonFunc json_func[] =
     "pkt_num | priority | proto | rev | rule | seconds | server_bytes | " \
     "server_pkts | service | sgt| sid | src_addr | src_ap | src_port | " \
     "target | tcp_ack | tcp_flags | tcp_len | tcp_seq | tcp_win | timestamp | " \
-    "tos | ttl | udp_len | vlan"
+    "tos | ttl | udp_len | vlan" 
 
 #define json_deflt \
     "timestamp pkt_num proto pkt_gen pkt_len dir src_ap dst_ap rule action"
@@ -715,7 +976,7 @@ static const Parameter s_params[] =
 {
     { "file", Parameter::PT_BOOL, nullptr, "false",
       "output to " F_NAME " instead of stdout" },
-#ifdef HAVE_CPR || HAVE_RDKAFKA
+#if defined(HAVE_CPR) || defined(HAVE_RDKAFKA)
     { "type", Parameter::PT_STRING, nullptr, EXPORT_TYPE_STDOUT,
       "Default export type" },
 #endif
@@ -765,7 +1026,7 @@ public:
     string kafka_broker;
     string kafka_topic;
 #endif
-#ifdef HAVE_CPR || HAVE_RDKAFKA
+#if defined(HAVE_CPR) || defined(HAVE_RDKAFKA)
     string type;
 #endif
 #ifdef HAVE_CPR
@@ -778,7 +1039,7 @@ public:
 
 bool JsonModule::set(const char*, Value& v, SnortConfig*)
 {
-#ifdef HAVE_CPR || HAVE_RDKAFKA
+#if defined(HAVE_CPR) || defined(HAVE_RDKAFKA)
     if ( v.is("type") )
         type = v.get_string();
 #endif
@@ -789,13 +1050,13 @@ bool JsonModule::set(const char*, Value& v, SnortConfig*)
 #endif
 
 #ifdef HAVE_RDKAFKA
-
     if (v.is("kafka_broker"))
         kafka_broker = v.get_string();
 
     if (v.is("kafka_topic"))
         kafka_topic = v.get_string();
 #endif
+
     if ( v.is("file") )
         file = v.get_bool();
 
@@ -857,6 +1118,12 @@ public:
 };
 
 #ifdef HAVE_RDKAFKA
+struct KafkaContext {
+    rd_kafka_t *rk;
+    rd_kafka_conf_t *conf;
+    rd_kafka_topic_t *rkt;
+};
+
 class KafkaExporterStrategy : public LogExporterBaseStrategy {
 public:
     KafkaExporterStrategy(const string& broker, const string& topic, vector<JsonFunc> fields)
@@ -867,52 +1134,41 @@ public:
 
     void open() override {
         json_log = TextLog_Init(F_NAME, LOG_BUFFER, 0);
-        conf = rd_kafka_conf_new();
-        rd_kafka_conf_set(conf, "bootstrap.servers", kafka_broker.c_str(), errstr, sizeof(errstr));
-        rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
-        rkt = rd_kafka_topic_new(rk, kafka_topic.c_str(), nullptr);
+        ctx.conf = rd_kafka_conf_new();
+        rd_kafka_conf_set(ctx.conf, "bootstrap.servers", kafka_broker.c_str(), errstr, sizeof(errstr));
+        ctx.rk = rd_kafka_new(RD_KAFKA_PRODUCER, ctx.conf, errstr, sizeof(errstr));
+        ctx.rkt = rd_kafka_topic_new(ctx.rk, kafka_topic.c_str(), nullptr);
     }
 
     void close() override {
-        if ( json_log )
+        if (json_log)
             TextLog_Term(json_log);
-        if (rkt)
-        {
-            rd_kafka_topic_destroy(rkt);
-        }
-        if (rk)
-        {
-            rd_kafka_flush(rk, 10000);
-            rd_kafka_destroy(rk);
+        if (ctx.rkt)
+            rd_kafka_topic_destroy(ctx.rkt);
+        if (ctx.rk) {
+            rd_kafka_flush(ctx.rk, 10000);
+            rd_kafka_destroy(ctx.rk);
         }
     }
 
     void alert(Packet *p, const char *msg, const Event &event) override {
         Args a = {p, msg, event, false};
         TextLog_Putc(json_log, '{');
-        for (JsonFunc f : fields)
-        {
+        for (JsonFunc f : fields) {
             f(a);
             a.comma = true;
         }
-
         TextLog_Print(json_log, " }\n");
         char* json_event = TextLog_GetBuffer(json_log);
-        if (json_event)
-        {
+        if (json_event) {
             size_t json_event_size = strlen(json_event);
-
-            if (rd_kafka_produce(
-                    rkt, RD_KAFKA_PARTITION_UA, RD_KAFKA_MSG_F_COPY,
+            rd_kafka_produce(
+                    ctx.rkt, RD_KAFKA_PARTITION_UA, RD_KAFKA_MSG_F_COPY,
                     json_event, json_event_size,
-                    NULL, 0, NULL) == -1)
-            {
-                fprintf(stderr, "Failed to send event to Kafka: %s\n", 
-                        rd_kafka_err2str(rd_kafka_last_error()));
-            }
+                    NULL, 0, NULL);
         }
         TextLog_Flush(json_log);
-        rd_kafka_poll(rk, 0);
+        rd_kafka_poll(ctx.rk, 0);
     }
 
 private:
@@ -920,20 +1176,22 @@ private:
     string kafka_topic;
     vector<JsonFunc> fields;
     char errstr[512];
-    thread_local static rd_kafka_t *rk;
-    thread_local static rd_kafka_conf_t *conf;
-    thread_local static rd_kafka_topic_t *rkt;
+    thread_local static KafkaContext ctx;
 };
 
-thread_local rd_kafka_t *KafkaExporterStrategy::rk = nullptr;
-thread_local rd_kafka_conf_t *KafkaExporterStrategy::conf = nullptr;
-thread_local rd_kafka_topic_t *KafkaExporterStrategy::rkt = nullptr;
+thread_local KafkaContext KafkaExporterStrategy::ctx = {nullptr, nullptr, nullptr};
+
 #endif
 
 #ifdef HAVE_CPR
-class HttpExporterStrategy : public  LogExporterBaseStrategy {
+
+//---------------------------------
+// HTTP ASYNC SENDING
+//---------------------------------
+
+class HttpExporterStrategy : public LogExporterBaseStrategy {
 public:
-    HttpExporterStrategy(const string http_endpoint, vector<JsonFunc> fields)
+    HttpExporterStrategy(const std::string& http_endpoint, std::vector<JsonFunc> fields)
         : http_endpoint(http_endpoint), fields(fields)
     {}
 
@@ -942,7 +1200,7 @@ public:
     }
 
     void close() override {
-        if ( json_log )
+        if (json_log)
             TextLog_Term(json_log);
     }
 
@@ -950,26 +1208,27 @@ public:
         Args a = { p, msg, event, false };
         TextLog_Putc(json_log, '{');
 
-        for ( JsonFunc f : fields )
-        {
+        for (JsonFunc f : fields) {
             f(a);
             a.comma = true;
         }
 
         TextLog_Print(json_log, " }\n");
         char* json_event = TextLog_GetBuffer(json_log);
-        if(json_event){
-            cpr::Response r = cpr::Post(cpr::Url{http_endpoint},
-                            cpr::VerifySsl{false},
-                            cpr::Body(json_event),
-                            cpr::Header{{"Content-Type", "application/json"}});
+        if (json_event) {
+            std::string body(json_event);
+            auto future_response = cpr::PostAsync(
+                cpr::Url{http_endpoint},
+                cpr::VerifySsl{false},
+                cpr::Body{body},
+                cpr::Header{{"Content-Type", "application/json"}});
         }
         TextLog_Flush(json_log);
     }
 
 private:
-    string http_endpoint;
-    vector<JsonFunc> fields;
+    std::string http_endpoint;
+    std::vector<JsonFunc> fields;
 };
 #endif
 
@@ -1035,6 +1294,10 @@ public:
     }
 
     void open() override {
+#ifdef HAVE_MACVENDORDB
+        // TODO (LOAD mac_vendors)
+        MacVendorDB.insert_mac_vendors_from_file(mac_vendors.c_str());
+#endif
         exporter->open();
     }
 

@@ -228,6 +228,7 @@ message("
 target_link_libraries( snort
     ${EXTERNAL_LIBRARIES}
     ${EXTRA_LIBRARIES}
+    curl
 )
 
 # Solaris requires libnsl and libsocket for various network-related library functions

@@ -113,9 +113,30 @@
 /* The size of `unsigned long int', as computed by sizeof. */
 #cmakedefine SIZEOF_UNSIGNED_LONG_INT @SIZEOF_UNSIGNED_LONG_INT@
 
+/* REDBORDER MODIFICATIONS */
+
 /* Define if words are big endian */
 #cmakedefine WORDS_BIGENDIAN 1
 
+/* We Have RdKafka */
+#cmakedefine HAVE_RDKAFKA 1
+
+/* We heave cpr (libcurl wrapper) */
+#cmakedefine HAVE_CPR 1
+
+/* Override functions in alert_json */
+#cmakedefine RB_ENABLE_OVERRIDES 1
+
+/* Compile and use Mac Vendor DB */
+#cmakedefine HAVE_MACVENDORDB 1
+
+/* Compile and use GeoIP */
+#cmakedefine HAVE_GEOIP 1
+
+/* Compile and use redBorder sensor enrichment moduel */
+#cmakedefine HAVE_GEOIP 1
+
+/* END OF REDBORDER MODIFICATIONS */
 
 /*  Header file definitions */
 
