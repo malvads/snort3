@@ -118,6 +118,9 @@
 /* Define if words are big endian */
 #cmakedefine WORDS_BIGENDIAN 1
 
+/* Define if compile with extra data */
+#cmakedefine RB_EXTRADATA 0
+
 /* We Have RdKafka */
 #cmakedefine HAVE_RDKAFKA 1
 
@@ -128,13 +131,13 @@
 #cmakedefine RB_ENABLE_OVERRIDES 1
 
 /* Compile and use Mac Vendor DB */
-#cmakedefine HAVE_MACVENDORDB 1
+#cmakedefine HAVE_MACVENDORDB 0
 
 /* Compile and use GeoIP */
-#cmakedefine HAVE_GEOIP 1
+#cmakedefine HAVE_GEOIP 0
 
 /* Compile and use redBorder sensor enrichment moduel */
-#cmakedefine HAVE_GEOIP 1
+#cmakedefine HAVE_ENRICHMENT 0
 
 /* END OF REDBORDER MODIFICATIONS */
 

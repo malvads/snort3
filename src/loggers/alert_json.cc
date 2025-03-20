@@ -55,21 +55,22 @@ using namespace std;
 #define LOG_BUFFER (4*K_BYTES)
 
 #ifdef HAVE_RDKAFKA
-#include <librdkafka/rdkafka.h>
-#define EXPORT_TYPE_KAFKA "kafka"
+    #include <librdkafka/rdkafka.h>
+    #define EXPORT_TYPE_KAFKA "kafka"
 #endif
 
 #ifdef HAVE_CPR
-#include <cpr/cpr.h>
-#define EXPORT_TYPE_HTTP "http"
+    #include <cpr/cpr.h>
+    #define EXPORT_TYPE_HTTP "http"
+    #define DEF_VERIFY_SSL "true"
 #endif
 
 #ifdef HAVE_GEOIP
-#include "geoip/rbgeoip.h"
+    #include "geoip/rbgeoip.h"
 #endif
 
 #ifdef HAVE_ENRICHMENT
-#include "enrichment/sensor_enrichment.h"
+    #include "enrichment/sensor_enrichment.h"
 #endif
 
 #define EXPORT_TYPE_STDOUT "stdout"
@@ -79,15 +80,15 @@ static THREAD_LOCAL TextLog* json_log;
 #define S_NAME "alert_json"
 #define F_NAME S_NAME ".txt"
 #ifdef HAVE_RDKAFKA
-#define D_TOPIC "rb_event"
-#define D_KAFKA_HOST "kafka.service:9092"
+    #define D_TOPIC "rb_event"
+    #define D_KAFKA_HOST "kafka.service:9092"
 #endif
 #ifdef HAVE_MACVENDORDB
-#include "macs/mac_vendors.h"
-MacVendorDatabase MacVendorDB;
+    #include "macs/mac_vendors.h"
+    MacVendorDatabase MacVendorDB;
 #endif
 #ifndef RB_ENABLE_OVERRIDES
-#define RB_ENABLE_OVERRIDES true
+    #define RB_ENABLE_OVERRIDES true
 #endif
 
 //-------------------------------------------------------------------------
@@ -120,10 +121,10 @@ static bool ff_action(const Args& a)
         string action = "log";
         if(a.pkt->active->packet_was_dropped()) action = "drop";
         if(a.pkt->active->packet_would_be_dropped()) action = "should_drop";
-#ifdef RB_EXTRADATA
-        if(a.pkt->active->packet_cant_be_dropped()) action = "cant_drop";
-        if(a.pkt->active->packet_would_be_allowed()) action = "alert";
-#endif
+        #ifdef RB_EXTRADATA
+            if(a.pkt->active->packet_cant_be_dropped()) action = "cant_drop";
+            if(a.pkt->active->packet_would_be_allowed()) action = "alert";
+        #endif
         TextLog_Quote(json_log, action.c_str());
     } else {
         TextLog_Quote(json_log, a.pkt->active->get_action_string());
@@ -221,214 +222,240 @@ static bool ff_dir(const Args& a)
 }
 
 #ifdef RB_EXTRADATA
-static bool ff_dst(const Args &a)
-{
-    if (a.pkt->has_ip() or a.pkt->is_data())
+    static bool ff_src(const Args &a)
     {
-        SfIpString ip_str;
-        print_label(a, "dst");
-        TextLog_Quote(json_log, a.pkt->ptrs.ip_api.get_dst()->ntop(ip_str));
-        return true;
+        if (a.pkt->has_ip() or a.pkt->is_data())
+        {
+            SfIpString ip_str;
+            print_label(a, "src");
+            TextLog_Quote(json_log, a.pkt->ptrs.ip_api.get_src()->ntop(ip_str));
+            return true;
+        }
+        return false;
     }
-    return false;
-}
 
-static bool ff_priority(const Args &a){
-    static const char *priority_name[] = {NULL, "high", "medium", "low", "very low"};
-    const int priority_id = a.event.sig_info->priority;
-    const char *prio_name = NULL;
-    if(priority_id < sizeof(priority_name)/sizeof(priority_name[0]))
-        prio_name = priority_name[priority_id];
-    print_label(a, "priority");
-    TextLog_Print(json_log, "\"%s\"", prio_name);
-    return true;
-}
+    static bool ff_dst(const Args &a)
+    {
+        if (a.pkt->has_ip() or a.pkt->is_data())
+        {
+            SfIpString ip_str;
+            print_label(a, "dst");
+            TextLog_Quote(json_log, a.pkt->ptrs.ip_api.get_dst()->ntop(ip_str));
+            return true;
+        }
+        return false;
+    }
+
+    static bool ff_udplen(const Args &a)
+    {
+        if (a.pkt->ptrs.udph)
+        {
+            print_label(a, "udplen");
+            TextLog_Print(json_log, "%u", ntohs(a.pkt->ptrs.udph->uh_len));
+            return true;
+        }
+        return false;
+    }
 
 #endif
 
 #if defined(RB_EXTRADATA) && defined(HAVE_GEOIP)
-static bool ff_src_country_code(const Args &a)
-{
-    if (a.pkt->has_ip() || a.pkt->is_data())
+    static bool ff_src_country_code(const Args &a)
     {
-        print_label(a, "src_country_code");
-        SfIpString ip_str;
-        a.pkt->ptrs.ip_api.get_src()->ntop(ip_str);
-        string ip_string = ip_str;
-        string country = GeoIpLoader::Manager::getInstance()->getCountryByIP(ip_string);
-        TextLog_Print(json_log, "\"%s\"", country.c_str());
-        return true;
+        if (a.pkt->has_ip() || a.pkt->is_data())
+        {
+            print_label(a, "src_country_code");
+            SfIpString ip_str;
+            a.pkt->ptrs.ip_api.get_src()->ntop(ip_str);
+            string ip_string = ip_str;
+            string country = GeoIpLoader::Manager::getInstance()->getCountryByIP(ip_string);
+            TextLog_Print(json_log, "\"%s\"", country.c_str());
+            return true;
+        }
+        return false;
     }
-    return false;
-}
+    static bool ff_dst_country_code(const Args &a)
+    {
+        if (a.pkt->has_ip() || a.pkt->is_data())
+        {
+            print_label(a, "dst_country_code");
+            SfIpString ip_str;
+            a.pkt->ptrs.ip_api.get_dst()->ntop(ip_str);
+            string ip_string = ip_str;
+            string country = GeoIpLoader::Manager::getInstance()->getCountryByIP(ip_string);
+            BinaryWriter_Print(json_log, "\"%s\"", country.c_str());
+            return true;
+        }
+        return false;
+    }
 #endif
 
 #ifdef RB_EXTRADATA
-static bool ff_dst_country(const Args &a)
-{
-    print_label(a, "dst_country");
-    TextLog_Print(json_log, "\"Unknown\"");
-    return true;
-}
-static bool ff_src_country(const Args &a)
-{
-    print_label(a, "src_country");
-    TextLog_Print(json_log, "\"Unknown\"");
-    return true;
-}
-static bool ff_ethlength_range(const Args &a)
-{
-    if (a.pkt)
+    static bool ff_dst_country(const Args &a)
     {
-        int len = 0;
+        print_label(a, "dst_country");
+        TextLog_Print(json_log, "\"Unknown\"");
+        return true;
+    }
+    static bool ff_src_country(const Args &a)
+    {
+        print_label(a, "src_country");
+        TextLog_Print(json_log, "\"Unknown\"");
+        return true;
+    }
+    static bool ff_ethlength_range(const Args &a)
+    {
+        if (a.pkt)
+        {
+            int len = 0;
 
-        if (a.pkt->has_ip())
-            len = a.pkt->ptrs.ip_api.dgram_len();
-        else
-            len = a.pkt->dsize;
+            if (a.pkt->has_ip())
+                len = a.pkt->ptrs.ip_api.dgram_len();
+            else
+                len = a.pkt->dsize;
 
-        print_label(a, "ethlength_range");
+            print_label(a, "ethlength_range");
 
-        if (len == 0)
-        {
-            TextLog_Print(json_log, "\"0\"");
+            if (len == 0)
+            {
+                TextLog_Print(json_log, "\"0\"");
+            }
+            else if (len <= 64)
+            {
+                TextLog_Print(json_log, "\"(0-64]\"");
+            }
+            else if (len <= 128)
+            {
+                TextLog_Print(json_log, "\"(64-128]\"");
+            }
+            else if (len <= 256)
+            {
+                TextLog_Print(json_log, "\"(128-256]\"");
+            }
+            else if (len <= 512)
+            {
+                TextLog_Print(json_log, "\"(256-512]\"");
+            }
+            else if (len <= 768)
+            {
+                TextLog_Print(json_log, "\"(512-768]\"");
+            }
+            else if (len <= 1024)
+            {
+                TextLog_Print(json_log, "\"(768-1024]\"");
+            }
+            else if (len <= 1280)
+            {
+                TextLog_Print(json_log, "\"(1024-1280]\"");
+            }
+            else if (len <= 1514)
+            {
+                TextLog_Print(json_log, "\"(1280-1514]\"");
+            }
+            else if (len <= 2048)
+            {
+                TextLog_Print(json_log, "\"(1514-2048]\"");
+            }
+            else if (len <= 4096)
+            {
+                TextLog_Print(json_log, "\"(2048-4096]\"");
+            }
+            else if (len <= 8192)
+            {
+                TextLog_Print(json_log, "\"(4096-8192]\"");
+            }
+            else if (len <= 16384)
+            {
+                TextLog_Print(json_log, "\"(8192-16384]\"");
+            }
+            else if (len <= 32768)
+            {
+                TextLog_Print(json_log, "\"(16384-32768]\"");
+            }
+            else
+            {
+                TextLog_Print(json_log, "\">32768\"");
+            }
+
+            return true;
         }
-        else if (len <= 64)
-        {
-            TextLog_Print(json_log, "\"(0-64]\"");
-        }
-        else if (len <= 128)
-        {
-            TextLog_Print(json_log, "\"(64-128]\"");
-        }
-        else if (len <= 256)
-        {
-            TextLog_Print(json_log, "\"(128-256]\"");
-        }
-        else if (len <= 512)
-        {
-            TextLog_Print(json_log, "\"(256-512]\"");
-        }
-        else if (len <= 768)
-        {
-            TextLog_Print(json_log, "\"(512-768]\"");
-        }
-        else if (len <= 1024)
-        {
-            TextLog_Print(json_log, "\"(768-1024]\"");
-        }
-        else if (len <= 1280)
-        {
-            TextLog_Print(json_log, "\"(1024-1280]\"");
-        }
-        else if (len <= 1514)
-        {
-            TextLog_Print(json_log, "\"(1280-1514]\"");
-        }
-        else if (len <= 2048)
-        {
-            TextLog_Print(json_log, "\"(1514-2048]\"");
-        }
-        else if (len <= 4096)
-        {
-            TextLog_Print(json_log, "\"(2048-4096]\"");
-        }
-        else if (len <= 8192)
-        {
-            TextLog_Print(json_log, "\"(4096-8192]\"");
-        }
-        else if (len <= 16384)
-        {
-            TextLog_Print(json_log, "\"(8192-16384]\"");
-        }
-        else if (len <= 32768)
-        {
-            TextLog_Print(json_log, "\"(16384-32768]\"");
-        }
-        else
-        {
-            TextLog_Print(json_log, "\">32768\"");
-        }
+        return false;
+    }
+    static bool ff_sig_generator(const Args &a)
+    {
+        print_label(a, "sig_generator");
+        TextLog_Print(json_log, "\"%u\"", a.event.get_rev());
 
         return true;
     }
-    return false;
-}
-static bool ff_sig_generator(const Args &a)
-{
-    print_label(a, "sig_generator");
-    TextLog_Print(json_log, "\"%u\"", a.event.sig_info->rev);
-
-    return true;
-}
-static bool ff_sig_id(const Args &a)
-{
-    print_label(a, "sig_id");
-    TextLog_Print(json_log, "\"%u\"", a.event.sig_info->sid);
-    return true;
-}
-
-#ifdef HAVE_MACVENDORDB
-static bool ff_eth_src_mac(const Args &a)
-{
-    if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
-        return false;
-
-    print_label(a, "ethsrcmac");
-
-    const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
-
-    uint64_t mac_prefix = 0;
-    for (int i = 0; i < 6; ++i)
+    static bool ff_sig_id(const Args &a)
     {
-        mac_prefix <<= 8;
-        mac_prefix |= static_cast<uint64_t>(eh->ether_src[i]);
+        print_label(a, "sig_id");
+        TextLog_Print(json_log, "\"%u\"", a.event.get_rev());
+        return true;
     }
 
-    const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
+    #ifdef HAVE_MACVENDORDB
+        static bool ff_eth_src_mac(const Args &a)
+        {
+            if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
+                return false;
 
-    if (vendor)
-    {
-        TextLog_Print(json_log, "\"%s\"", vendor);
-    }
-    else
-    {
-        TextLog_Print(json_log, "\"%s\"", "Unknown");
-    }
+            print_label(a, "ethsrcmac");
 
-    return true;
-}
+            const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
 
-static bool ff_eth_dst_mac(const Args &a)
-{
-    if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
-        return false;
+            uint64_t mac_prefix = 0;
+            for (int i = 0; i < 6; ++i)
+            {
+                mac_prefix <<= 8;
+                mac_prefix |= static_cast<uint64_t>(eh->ether_src[i]);
+            }
 
-    print_label(a, "ethdstmac");
+            const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
 
-    const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
+            if (vendor)
+            {
+                TextLog_Print(json_log, "\"%s\"", vendor);
+            }
+            else
+            {
+                TextLog_Print(json_log, "\"%s\"", "Unknown");
+            }
 
-    uint64_t mac_prefix = 0;
-    for (int i = 0; i < 6; ++i)
-    {
-        mac_prefix <<= 8;
-        mac_prefix |= static_cast<uint64_t>(eh->ether_dst[i]);
-    }
+            return true;
+        }
 
-    const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
+        static bool ff_eth_dst_mac(const Args &a)
+        {
+            if (!(a.pkt->proto_bits & PROTO_BIT__ETH))
+                return false;
 
-    if (vendor)
-    {
-        TextLog_Print(json_log, "\"%s\"", vendor);
-    }
-    else
-    {
-        TextLog_Print(json_log, "\"%s\"", "Unknown");
-    }
+            print_label(a, "ethdstmac");
 
-    return true;
-}
-#endif
+            const eth::EtherHdr *eh = layer::get_eth_layer(a.pkt);
+
+            uint64_t mac_prefix = 0;
+            for (int i = 0; i < 6; ++i)
+            {
+                mac_prefix <<= 8;
+                mac_prefix |= static_cast<uint64_t>(eh->ether_dst[i]);
+            }
+
+            const char *vendor = MacVendorDB.find_mac_vendor(mac_prefix);
+
+            if (vendor)
+            {
+                TextLog_Print(json_log, "\"%s\"", vendor);
+            }
+            else
+            {
+                TextLog_Print(json_log, "\"%s\"", "Unknown");
+            }
+
+            return true;
+        }
+    #endif
 #endif
 
 static bool ff_dst_addr(const Args& a)
@@ -611,11 +638,20 @@ static bool ff_ip_id(const Args& a)
     return false;
 }
 
-static bool ff_ip_len(const Args& a)
+#ifndef RB_ENABLE_OVERRIDES
+     bool ff_ip_len(const Args& a)
+#else
+    static bool ff_iplen(const Args& a)
+#endif
 {
     if (a.pkt->has_ip())
     {
-        print_label(a, "ip_len");
+        #ifndef RB_ENABLE_OVERRIDES
+            print_label(a, "ff_ip_len");
+        #else
+            print_label(a, "ff_iplen");
+        #endif
+        
         TextLog_Print(json_log, "%u", a.pkt->ptrs.ip_api.pay_len());
         return true;
     }
@@ -675,8 +711,19 @@ static bool ff_pkt_num(const Args& a)
 
 static bool ff_priority(const Args& a)
 {
-    print_label(a, "priority");
-    TextLog_Print(json_log, "%u", a.event.get_priority());
+    if(RB_ENABLE_OVERRIDES){
+        static const char *priority_name[] = {NULL, "high", "medium", "low", "very low"};
+        const int priority_id = a.event.get_priority();
+        const char *prio_name = NULL;
+        if(priority_id < sizeof(priority_name)/sizeof(priority_name[0]))
+            prio_name = priority_name[priority_id];
+        print_label(a, "priority");
+        TextLog_Print(json_log, "\"%s\"", prio_name);
+        return true;
+    } else {
+        print_label(a, "priority");
+        TextLog_Print(json_log, "%u", a.event.get_priority());
+    }
     return true;
 }
 
@@ -899,6 +946,7 @@ static bool ff_timestamp(const Args& a)
         TextLog_Putc(json_log, '"');
         return true;
     }
+    return false;
 }
 
 static bool ff_tos(const Args& a)
@@ -952,25 +1000,71 @@ static const JsonFunc json_func[] =
     ff_action, ff_class, ff_b64_data, ff_client_bytes, ff_client_pkts, ff_dir,
     ff_dst_addr, ff_dst_ap, ff_dst_port, ff_eth_dst, ff_eth_len, ff_eth_src,
     ff_eth_type, ff_flowstart_time, ff_geneve_vni, ff_gid, ff_icmp_code, ff_icmp_id, ff_icmp_seq,
-    ff_icmp_type, ff_iface, ff_ip_id, ff_ip_len, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len,
+    ff_icmp_type, ff_iface, ff_ip_id, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len,
     ff_pkt_num, ff_priority, ff_proto, ff_rev, ff_rule, ff_seconds, ff_server_bytes,
     ff_server_pkts, ff_service, ff_sgt, ff_sid, ff_src_addr, ff_src_ap, ff_src_port,
-    ff_target, ff_tcp_ack, ff_tcp_flags,ff_tcp_len, ff_tcp_seq, ff_tcp_win, ff_timestamp,
-    ff_tos, ff_ttl, ff_udp_len, ff_vlan
+    ff_target, ff_tcp_ack, ff_tcp_flags, ff_tcp_len, ff_tcp_seq, ff_tcp_win, ff_timestamp,
+    ff_tos, ff_ttl, ff_udp_len, ff_vlan,
+#ifndef RB_ENABLE_OVERRIDES
+    ff_ip_len,
+#else
+    ff_iplen,
+#endif
+    #ifdef RB_EXTRADATA
+        ff_src, ff_dst, ff_src_country, ff_dst_country,
+        ff_ethlength_range, ff_udplen, ff_sig_id, ff_sig_generator,
+        
+    #ifdef HAVE_MACVENDORDB
+        ff_eth_src_mac, ff_eth_dst_mac,
+    #endif
+
+    #ifdef HAVE_GEOIP
+        ff_src_country_code, ff_dst_country_code,
+    #endif
+#endif
 };
 
-#define json_range \
+#define JSON_RANGE_BASE \
     "action | class | b64_data | client_bytes | client_pkts | dir | " \
     "dst_addr | dst_ap | dst_port | eth_dst | eth_len | eth_src | " \
     "eth_type | flowstart_time | geneve_vni | gid | icmp_code | icmp_id | icmp_seq | " \
-    "icmp_type | iface | ip_id | ip_len | msg | mpls | pkt_gen | pkt_len | " \
+    "icmp_type | iface | ip_id | msg | mpls | pkt_gen | pkt_len | " \
     "pkt_num | priority | proto | rev | rule | seconds | server_bytes | " \
-    "server_pkts | service | sgt| sid | src_addr | src_ap | src_port | " \
+    "server_pkts | service | sgt | sid | src_addr | src_ap | src_port | " \
     "target | tcp_ack | tcp_flags | tcp_len | tcp_seq | tcp_win | timestamp | " \
-    "tos | ttl | udp_len | vlan" 
+    "tos | ttl | udp_len | vlan"
+
+#ifdef RB_ENABLE_OVERRIDES
+    #define JSON_IP_FIELD " | iplen"
+#else
+    #define JSON_IP_FIELD " | ip_len"
+#endif
+
+#ifdef RB_EXTRADATA
+    #ifdef HAVE_MACVENDORDB
+        #ifdef HAVE_GEOIP
+            #define json_range JSON_RANGE_BASE JSON_IP_FIELD " | src | dst | src_country | dst_country | ethlength_range | udplen | sig_id | sig_generator" \
+                              " | eth_src_mac | eth_dst_mac" \
+                              " | src_country_code | dst_country_code"
+        #else
+            #define json_range JSON_RANGE_BASE JSON_IP_FIELD " | src | dst | src_country | dst_country | ethlength_range | udplen | sig_id | sig_generator" \
+                              " | eth_src_mac | eth_dst_mac"
+        #endif
+    #else
+        #ifdef HAVE_GEOIP
+            #define json_range JSON_RANGE_BASE JSON_IP_FIELD " | src | dst | src_country | dst_country | ethlength_range | udplen | sig_id | sig_generator" \
+                              " | src_country_code | dst_country_code"
+        #else
+            #define json_range JSON_RANGE_BASE JSON_IP_FIELD " | src | dst | src_country | dst_country | ethlength_range | udplen | sig_id | sig_generator"
+        #endif
+    #endif
+#else
+    #define json_range JSON_RANGE_BASE JSON_IP_FIELD
+#endif
 
 #define json_deflt \
     "timestamp pkt_num proto pkt_gen pkt_len dir src_ap dst_ap rule action"
+
 
 static const Parameter s_params[] =
 {
@@ -984,6 +1078,9 @@ static const Parameter s_params[] =
 #ifdef HAVE_CPR
     { "http_endpoint", Parameter::PT_STRING, nullptr, nullptr,
       "HTTP endpoint for send data to the manager" },
+
+    { "verify_ssl", Parameter::PT_BOOL, nullptr, DEF_VERIFY_SSL,
+      "Verify SSL Cert when sending requests" },
 #endif
 
 #ifdef HAVE_RDKAFKA
@@ -1031,6 +1128,7 @@ public:
 #endif
 #ifdef HAVE_CPR
     string http_endpoint;
+    bool verify_ssl;
 #endif
     size_t limit = 0;
     string sep;
@@ -1191,8 +1289,8 @@ thread_local KafkaContext KafkaExporterStrategy::ctx = {nullptr, nullptr, nullpt
 
 class HttpExporterStrategy : public LogExporterBaseStrategy {
 public:
-    HttpExporterStrategy(const std::string& http_endpoint, std::vector<JsonFunc> fields)
-        : http_endpoint(http_endpoint), fields(fields)
+    HttpExporterStrategy(const std::string& http_endpoint, const bool verify_ssl, std::vector<JsonFunc> fields)
+        : http_endpoint(http_endpoint), verify_ssl(verify_ssl), fields(fields)
     {}
 
     void open() override {
@@ -1219,7 +1317,7 @@ public:
             std::string body(json_event);
             auto future_response = cpr::PostAsync(
                 cpr::Url{http_endpoint},
-                cpr::VerifySsl{false},
+                cpr::VerifySsl{verify_ssl},
                 cpr::Body{body},
                 cpr::Header{{"Content-Type", "application/json"}});
         }
@@ -1228,6 +1326,7 @@ public:
 
 private:
     std::string http_endpoint;
+    bool verify_ssl;
     std::vector<JsonFunc> fields;
 };
 #endif
@@ -1280,7 +1379,7 @@ public:
 
 #ifdef HAVE_CPR
         if(m->type == EXPORT_TYPE_HTTP) {
-            return make_unique<HttpExporterStrategy>(m->http_endpoint, m->fields);
+            return make_unique<HttpExporterStrategy>(m->http_endpoint, m->verify_ssl, m->fields);
         }
 #endif
         return make_unique<StdoutExporterStrategy>(m->file, m->limit, m->fields);

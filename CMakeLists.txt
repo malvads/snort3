@@ -214,7 +214,7 @@ endif ()
 
 if (HAVE_RDKAFKA)
     message("\
-    LIBRDKAFKA:      ON")
+    LIBRDKAFKA:     ON")
 else ()
     message("\
     LIBRDKAFKA:     OFF")
@@ -226,6 +226,15 @@ if (HAVE_CPR)
 else ()
     message("\
     CPR:            OFF")
+endif ()
+
+
+if (RB_EXTRADATA)
+    message("\
+    RB_EXTRADATA:      ON")
+else ()
+    message("\
+    RB_EXTRADATA:      OFF")
 endif ()
 
 message("-------------------------------------------------------\n")

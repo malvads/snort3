@@ -132,6 +132,8 @@ Optional Packages:
                             librdkafka library directory
     --enable-alert-kafka
                             enable kafka alerts in alert_json plugin
+    --enable-extra-data
+                            enable extra data in active.h and alert_json.cc
     --with-libnuma-includes=DIR
                             libnuma include directory
     --with-libnuma-libraries=DIR
@@ -502,6 +504,9 @@ while [ $# -ne 0 ]; do
             ;;
         --enable-alert-kafka)
             append_cache_entry ENABLE_ALERT_KAFKA BOOL true
+            ;;
+        --enable-extra-data)
+            append_cache_entry RB_EXTRADATA BOOL true
             ;;
         --with-cpr-includes=*)
             append_cache_entry CPR_INCLUDE_DIR_HINT PATH $optarg
